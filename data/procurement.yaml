@@ -1,0 +1,21 @@
+metadata:
+  process_name: "Закупка товаров и услуг (Procurement)"
+  process_owner: "Отдел закупок"
+  version: "1.2"
+triggers: ["закупка", "купить", "procurement"]
+categories:
+  - category_id: "T1"
+    description: "Закупка на сумму до 50 000 руб."
+    steps:
+      - step_id: "T1-1"
+        description: "Создать заявку в Jira в проекте PROC. В заголовке указать 'T1: [Название]'."
+        link: "https://jira.company.com/secure/CreateIssue.jspa?pid=12345"
+      - step_id: "T1-2"
+        description: "Дождаться согласования от руководителя отдела."
+  - category_id: "T2"
+    description: "Закупка на сумму от 50 001 до 300 000 руб."
+    steps:
+      - step_id: "T2-1"
+        description: "Создать заявку в Jira в проекте PROC. В заголовке указать 'T2: [Название]'."
+      - step_id: "T2-2"
+        description: "Получить согласование от финансового контроллера и руководителя дирекции."
