@@ -1,0 +1,30 @@
+# data/group_procurement.yaml
+metadata:
+  process_name: "Организация групповой закупки"
+  process_owner: "Отдел закупок"
+  version: "1.0"
+triggers: ["групповая закупка", "коллективная закупка", "group purchasing", "gpo"]
+categories:
+  - category_id: "GP1"
+    description: "Инициация групповой закупки"
+    steps:
+      - step_id: "GP1-1"
+        description: "Создать заявку в Jira в проекте PROC. В заголовке указать 'Групповая закупка: [Название товара/услуги]'."
+        link: "https://jira.company.com/secure/CreateIssue.jspa?pid=12345"
+        jira_action:
+          project_key: "PROC"
+          issue_type: "Task"
+          summary_prefix: "Групповая закупка: "
+          description_template: |
+            Иницирована групповая закупка на основании запроса пользователя.
+
+            Детали запроса:
+            {user_query}
+
+            Необходимо:
+            1. Определить потенциальных поставщиков
+            2. Провести анализ рынка
+            3. Организовать переговоры с поставщиками
+            4. Согласовать условия с участниками закупки
+          components: ["Закупки"]
+          labels: ["group_purchasing", "procurement"]

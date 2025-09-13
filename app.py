@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 from rag_core import RAGSystem
 import time
@@ -31,6 +30,11 @@ def main():
         st.success(f"Ответ получен за {round(end_time - start_time, 2)} секунды")
         st.markdown("### Ответ:")
         st.write(answer)
+
+        # Показываем дополнительную информацию, если создана задача Jira
+        if "Задача в Jira создана успешно" in answer:
+            st.success("🎉 Задача в Jira была автоматически создана!")
+            st.info("Отдел закупок уже уведомлен и скоро свяжется с вами для уточнения деталей.")
 
         with st.expander("Показать детали поиска"):
             relevant_docs = rag.get_relevant_context(query)
