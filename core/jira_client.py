@@ -12,7 +12,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('jira_client.log'),
+        logging.FileHandler('../jira_client.log'),
         logging.StreamHandler()
     ]
 )

@@ -1,19 +1,9 @@
-# app.py
 import streamlit as st
-from rag_core import RAGSystem
+from core.rag_service import RAGService
 import time
-import logging
+from core.logger import setup_logger
 
-# Настройка логирования
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('app.log'),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+logger = setup_logger(__name__)
 
 st.set_page_config(
     page_title="Локальная RAG-система",
@@ -24,17 +14,17 @@ st.set_page_config(
 # Инициализация состояния сессии
 if "history" not in st.session_state:
     st.session_state.history = []
-if "rag_system" not in st.session_state:
+if "rag_service" not in st.session_state:
     try:
-        logger.info("Инициализация RAG системы")
-        rag = RAGSystem()
-        rag.load_vector_store()
-        st.session_state.rag_system = rag
-        logger.info("RAG система успешно инициализирована")
+        logger.info("Инициализация RAG сервиса")
+        rag_service = RAGService()
+        rag_service.load()
+        st.session_state.rag_service = rag_service
+        logger.info("RAG сервис успешно инициализирован")
     except Exception as e:
-        logger.error(f"Ошибка инициализации RAG системы: {str(e)}")
+        logger.error(f"Ошибка инициализации RAG сервиса: {str(e)}")
         st.error(f"Ошибка инициализации системы: {str(e)}")
-        st.session_state.rag_system = None
+        st.session_state.rag_service = None
 
 
 def main():
@@ -58,7 +48,7 @@ def main():
         submit_button = st.form_submit_button(label="Отправить")
 
     if submit_button and query:
-        if st.session_state.rag_system is None:
+        if st.session_state.rag_service is None:
             st.error("Система не инициализирована. Пожалуйста, проверьте логи.")
             return
 
@@ -72,10 +62,10 @@ def main():
 
             with st.spinner("Обработка запроса..."):
                 start_time = time.time()
-                answer = st.session_state.rag_system.process_query(query)
+                answer = st.session_state.rag_service.process_query(query)
                 end_time = time.time()
 
-                # Добавляем ответ в историю
+                # Добавляем ответ в история
                 st.session_state.history.append({
                     "role": "assistant",
                     "content": answer,
