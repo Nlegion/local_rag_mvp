@@ -1,0 +1,27 @@
+metadata:
+  process_name: "Организация групповой закупки"
+  process_owner: "Отдел закупок"
+  version: "1.0"
+triggers: ["групповая закупка", "коллективная закупка", "group purchasing", "gpo"]
+categories:
+  - category_id: "GP1"
+    description: "Инициация групповой закупки"
+    steps:
+      - step_id: "GP1-1"
+        description: "Автоматическое создание заявки в Jira"
+        system_action:
+          type: "create_jira_issue"
+          project_key: "PROC"
+          issue_type: "Task"
+          summary_template: "Групповая закупка: {user_query}"
+          description_template: |
+            Иницирована групповая закупка на основании запроса пользователя.
+            
+            Детали запроса:
+            {user_query}
+          components: ["Закупки"]
+          labels: ["group_purchasing", "procurement"]
+        user_instruction: "Система автоматически создала заявку в Jira. Отдел закупок свяжется с вами для уточнения деталей."
+      - step_id: "GP1-2"
+        description: "Согласование с руководителем"
+        user_instruction: "Дождитесь согласования от вашего руководителя"

@@ -1,0 +1,17 @@
+# docker-compose.yml
+version: '3.9'
+
+services:
+  rag-app:
+    build: .
+    container_name: local_rag_app
+    ports:
+      - "8501:8501" # Пробрасываем порт Streamlit
+    volumes:
+      # Монтируем директории с данными, моделями и БД
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./chroma_db:/app/chroma_db
+    environment:
+      - STREAMLIT_SERVER_HEADLESS=true
+    # restart: unless-stopped # Раскомментируйте для автоматического перезапуска

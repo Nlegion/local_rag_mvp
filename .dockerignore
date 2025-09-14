@@ -1,0 +1,11 @@
+# .dockerignore
+venv/
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+chroma_db/ # Исключаем, так как она будет монтироваться как volume
+models/ # Исключаем, так как она будет монтироваться как volume
+data/ # Исключаем, так как она будет монтироваться как volume
