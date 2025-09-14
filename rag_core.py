@@ -1,21 +1,14 @@
-import re
-from jira_client import JiraClient, MockJiraClient
 import os
-import logging
 import yaml
-from typing import List
+import json
+from typing import List, Dict
+from langchain_community.vectorstores.utils import filter_complex_metadata
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
-from langchain_community.llms import LlamaCpp
-from langchain.callbacks.manager import CallbackManager
-from langchain.callbacks.streaming_stdout import StreamingStdOutCallbackHandler
-
-# Конфигурация путей
-MODEL_PATH = "./models/model-q4_K.gguf"
-DATA_DIR = "data"
-PERSIST_DIR = "chroma_db"
+from jira_client import MockJiraClient
+import logging
 
 # Настройка логирования
 logging.basicConfig(
@@ -28,267 +21,323 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Конфигурация путей
+MODEL_PATH = "./models/model-q4_K.gguf"
+DATA_DIR = "data"
+PERSIST_DIR = "chroma_db"
+
 
 class RAGSystem:
     def __init__(self):
-        # Инициализация модели для эмбеддингов (легкая, работает на CPU)
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
-            model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': False}
-        )
+        logger.info("Инициализация RAGSystem")
+        try:
+            # Инициализация модели для эмбеддингов
+            self.embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2",
+                model_kwargs={'device': 'cpu'},
+                encode_kwargs={'normalize_embeddings': False}
+            )
 
-        # Инициализация текстового сплиттера
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            length_function=len,
-        )
+            # Инициализация текстового сплиттера
+            self.text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=1000,
+                chunk_overlap=200,
+                length_function=len,
+            )
 
-        # Callback менеджер для потокового вывода
-        callback_manager = CallbackManager([StreamingStdOutCallbackHandler()])
+            # Инициализация клиента Jira
+            self.jira_client = MockJiraClient()
+            self.vectorstore = None
+            logger.info("RAGSystem инициализирован успешно")
 
-        # Инициализация локальной LLM (Saiga 3 8B)
-        self.llm = LlamaCpp(
-            model_path=MODEL_PATH,
-            temperature=0.1,
-            max_tokens=1000,
-            top_p=1,
-            callback_manager=callback_manager,
-            verbose=False,
-            n_gpu_layers=0,
-            n_ctx=4096,
-            n_batch=512,
-            f16_kv=True,
-            stop=["\n\n", "Источники:", "ИСТОЧНИКИ:"],
-        )
-
-        self.vectorstore = None
-        #self.jira_client = JiraClient()  # Добавляем клиент Jira
-        self.jira_client = MockJiraClient()
+        except Exception as e:
+            logger.error(f"Ошибка инициализации RAGSystem: {str(e)}")
+            raise
 
     def load_and_process_yaml(self) -> List[Document]:
-        """Загружает и парсит все YAML-файлы в директории, преобразуя их в текстовые документы."""
+        """Загружает и парсит все YAML-файлы в директории."""
         documents = []
-        for filename in os.listdir(DATA_DIR):
-            if filename.endswith(".yaml") or filename.endswith(".yml"):
-                file_path = os.path.join(DATA_DIR, filename)
-                with open(file_path, 'r', encoding='utf-8') as file:
-                    yaml_data = yaml.safe_load(file)
+        try:
+            if not os.path.exists(DATA_DIR):
+                logger.error(f"Директория с данными не существует: {DATA_DIR}")
+                return documents
 
-                # Преобразование структуры YAML в читаемый текст для поиска
-                process_text = f"""
-                Процесс: {yaml_data.get('metadata', {}).get('process_name', 'Название не указано')}
-                Владелец: {yaml_data.get('metadata', {}).get('process_owner', 'Не указан')}
-                Версия: {yaml_data.get('metadata', {}).get('version', 'Не указана')}
+            files = os.listdir(DATA_DIR)
+            yaml_files = [f for f in files if f.endswith((".yaml", ".yml"))]
 
-                Триггеры: {", ".join(yaml_data.get('triggers', []))}
+            if not yaml_files:
+                logger.warning(f"В директории {DATA_DIR} не найдено YAML-файлов")
+                return documents
 
-                Категории:
-                """
-                for category in yaml_data.get('categories', []):
-                    process_text += f"\nКатегория {category['category_id']}: {category['description']}\n"
-                    for step in category.get('steps', []):
-                        process_text += f"  Шаг {step['step_id']}: {step['description']}\n"
-                        if 'link' in step:
-                            process_text += f"    Ссылка: {step['link']}\n"
+            logger.info(f"Найдено YAML-файлов: {len(yaml_files)}: {', '.join(yaml_files)}")
 
-                # Создание документа LangChain с метаданными об источнике
-                metadata = {"source": filename}
-                documents.append(Document(page_content=process_text, metadata=metadata))
-        return documents
+            for filename in yaml_files:
+                try:
+                    file_path = os.path.join(DATA_DIR, filename)
+                    logger.info(f"Обработка файла: {filename}")
+
+                    with open(file_path, 'r', encoding='utf-8') as file:
+                        yaml_data = yaml.safe_load(file)
+
+                    # Формируем текст для поиска
+                    process_text = f"""
+                    Процесс: {yaml_data.get('metadata', {}).get('process_name', 'Название не указано')}
+                    Триггеры: {", ".join(yaml_data.get('triggers', []))}
+                    """
+
+                    system_actions = []
+                    user_instructions = []
+
+                    # Обрабатываем категории и шаги
+                    categories = yaml_data.get('categories', [])
+                    for category in categories:
+                        process_text += f"\nКатегория {category.get('category_id', 'N/A')}: {category.get('description', 'Описание отсутствует')}\n"
+                        steps = category.get('steps', [])
+                        for step in steps:
+                            step_desc = step.get('description', 'Описание отсутствует')
+                            process_text += f"  - {step_desc}\n"
+
+                            # Собираем системные действия
+                            if 'system_action' in step:
+                                system_actions.append({
+                                    'step_description': step_desc,
+                                    'action_config': step['system_action']
+                                })
+
+                            # Собираем инструкции для пользователя
+                            if 'user_instruction' in step:
+                                user_instructions.append(step['user_instruction'])
+
+                    # Создаем документ с метаданными
+                    metadata = {
+                        "source": filename,
+                        "system_actions": json.dumps(system_actions),
+                        "user_instructions": json.dumps(user_instructions),
+                        "has_system_actions": len(system_actions) > 0
+                    }
+
+                    doc = Document(page_content=process_text, metadata=metadata)
+                    documents.append(doc)
+                    logger.debug(f"Файл {filename} обработан, системных действий: {len(system_actions)}")
+
+                except Exception as e:
+                    logger.error(f"Ошибка обработки файла {filename}: {str(e)}")
+
+            return documents
+
+        except Exception as e:
+            logger.error(f"Ошибка в load_and_process_yaml: {str(e)}")
+            return []
 
     def build_vector_store(self):
         """Создает и наполняет векторную базу данных."""
-        print("Загрузка и обработка YAML-документов...")
-        docs = self.load_and_process_yaml()
-        if not docs:
-            raise ValueError(f"Не найдено YAML-файлов в директории {DATA_DIR}")
+        try:
+            logger.info("Начало построения векторной базы данных")
+            docs = self.load_and_process_yaml()
+            if not docs:
+                error_msg = f"Не найдено YAML-файлов в директории {DATA_DIR} или они содержат ошибки"
+                logger.error(error_msg)
+                raise ValueError(error_msg)
 
-        print("Разбиение документов на чанки...")
-        chunks = self.text_splitter.split_documents(docs)
+            logger.info("Разбиение документов на чанки...")
+            chunks = self.text_splitter.split_documents(docs)
 
-        print("Создание векторной базы данных...")
-        self.vectorstore = Chroma.from_documents(
-            documents=chunks,
-            embedding=self.embeddings,
-            persist_directory=PERSIST_DIR
-        )
-        self.vectorstore.persist()
-        print(f"Векторная база создана и сохранена в '{PERSIST_DIR}'")
+            # Фильтрация сложных метаданных
+            logger.info("Фильтрация сложных метаданных...")
+            filtered_chunks = filter_complex_metadata(chunks)
+            logger.info(f"После фильтрации осталось чанков: {len(filtered_chunks)}")
+
+            logger.info("Создание векторной базы данных...")
+            self.vectorstore = Chroma.from_documents(
+                documents=filtered_chunks,
+                embedding=self.embeddings,
+                persist_directory=PERSIST_DIR
+            )
+            self.vectorstore.persist()
+            logger.info(f"Векторная база создана и сохранена в '{PERSIST_DIR}'")
+
+        except Exception as e:
+            logger.error(f"Ошибка при построении векторной базы данных: {str(e)}")
+            raise
 
     def load_vector_store(self):
         """Загружает существующую векторную базу данных."""
-        self.vectorstore = Chroma(
-            persist_directory=PERSIST_DIR,
-            embedding_function=self.embeddings
-        )
-
-    def get_relevant_context(self, query: str, k: int = 3) -> List[Document]:
-        """Ищет k релевантных чанков для запроса."""
-        if self.vectorstore is None:
-            self.load_vector_store()
-        return self.vectorstore.similarity_search(query, k=k)
-
-    # rag_core.py (улучшенная обработка ошибок)
-    def generate_answer(self, query: str) -> str:
-        """Генерирует ответ на вопрос, используя контекст из векторной БД"""
         try:
-            relevant_docs = self.get_relevant_context(query)
-            context_text = "\n\n".join([doc.page_content for doc in relevant_docs])
-            sources = list(set([doc.metadata.get("source", "Unknown") for doc in relevant_docs]))
+            logger.info(f"Загрузка векторной базы из '{PERSIST_DIR}'")
+            self.vectorstore = Chroma(
+                persist_directory=PERSIST_DIR,
+                embedding_function=self.embeddings
+            )
+            logger.info("Векторная база успешно загружена")
+        except Exception as e:
+            logger.error(f"Ошибка при загрузке векторной базы: {str(e)}")
+            raise
 
-            # Проверяем, относится ли запрос к групповой закупке
-            jira_response = ""
-            if self.is_group_procurement_query(query, context_text):
-                jira_response = self.create_procurement_issue(query)
+    def get_relevant_document(self, query: str) -> Document:
+        """Находит наиболее релевантный документ для запроса."""
+        try:
+            if self.vectorstore is None:
+                self.load_vector_store()
 
-            # Улучшенный промт
-            prompt = f"""
-            Ты - помощник по внутренним процессам компании. Ответь на вопрос пользователя, используя только предоставленную информацию.
+            logger.info(f"Поиск релевантного документа для: '{query}'")
+            results = self.vectorstore.similarity_search(query, k=3)
 
-            Контекстная информация:
-            {context_text}
+            if not results:
+                logger.warning("Не найдено релевантных документов")
+                return None
 
-            Инструкции:
-            1. Отвечай только на основе предоставленной информации
-            2. Если информации для ответа нет, скажи "Не могу найти информацию по этому вопросу"
-            3. Будь кратким и конкретным
-            4. Отвечай на русском языке
-            5. Не придумывай информацию, которой нет в контексте
+            # Возвращаем наиболее релевантный документ
+            return results[0]
 
-            Вопрос: {query}
+        except Exception as e:
+            logger.error(f"Ошибка при поиске документа: {str(e)}")
+            return None
 
-            Ответ:
-            """
+    def execute_system_actions(self, document: Document, query: str) -> str:
+        """Выполняет системные действия, указанные в документе."""
+        try:
+            system_actions_str = document.metadata.get("system_actions", "[]")
+            system_actions = json.loads(system_actions_str)
 
-            response = self.llm.invoke(prompt)
+            if not system_actions:
+                return ""
 
-            # Очищаем ответ от возможного мусора
-            response = self.clean_response(response)
+            results = []
+            for action in system_actions:
+                action_type = action['action_config'].get('type', '')
 
-            # Если ответ пустой или слишком короткий, используем fallback
-            if len(response.strip()) < 10:
-                response = "Не могу найти точную информацию по вашему вопросу. Пожалуйста, обратитесь к соответствующему отделу."
+                if action_type == 'create_jira_issue':
+                    result = self.create_jira_issue(query, action['action_config'])
+                    results.append(result)
+                # Здесь можно добавить другие типы действий
 
-            # Добавляем информацию о задаче Jira, если она была создана
-            if jira_response:
-                response += f"\n\n{jira_response}"
+            return "\n".join(results)
 
-            response += f"\n\nИсточники: {', '.join(sources)}"
+        except Exception as e:
+            logger.error(f"Ошибка при выполнении системных действий: {str(e)}")
+            return ""
+
+    def get_user_instructions(self, document: Document) -> str:
+        """Возвращает инструкции для пользователя из документа."""
+        try:
+            instructions_str = document.metadata.get("user_instructions", "[]")
+            instructions = json.loads(instructions_str)
+
+            if not instructions:
+                return "Инструкции не найдены."
+
+            # Форматируем инструкции в виде маркированного списка
+            formatted_instructions = []
+            for i, instruction in enumerate(instructions, 1):
+                formatted_instructions.append(f"{i}. {instruction}")
+
+            return "\n".join(formatted_instructions)
+
+        except Exception as e:
+            logger.error(f"Ошибка при получении инструкций: {str(e)}")
+            return "Ошибка при получении инструкций."
+
+    def create_jira_issue(self, user_query: str, action_config: Dict) -> str:
+        """Создает задачу в Jira на основе конфигурации."""
+        try:
+            project_key = action_config.get("project_key", "PROC")
+            issue_type = action_config.get("issue_type", "Task")
+            summary_template = action_config.get("summary_template", "")
+            description_template = action_config.get("description_template", "")
+
+            summary = summary_template.format(user_query=user_query)
+            description = description_template.format(user_query=user_query)
+
+            components = action_config.get("components", [])
+            labels = action_config.get("labels", [])
+
+            # Создаем задачу в Jira
+            issue_data = self.jira_client.create_issue(
+                project_key=project_key,
+                issue_type=issue_type,
+                summary=summary,
+                description=description,
+                components=components,
+                labels=labels
+            )
+
+            if issue_data:
+                issue_key = issue_data.get("key", "UNKNOWN")
+                issue_url = self.jira_client.get_issue_url(issue_key)
+                return f"✅ Задача в Jira создана: {issue_key}. Ссылка: {issue_url}"
+            else:
+                return "❌ Не удалось создать задачу в Jira."
+
+        except Exception as e:
+            logger.error(f"Ошибка при создании задачи Jira: {str(e)}")
+            return "❌ Ошибка при создании задачи в Jira."
+
+    def process_query(self, query: str) -> str:
+        """Обрабатывает запрос пользователя и возвращает ответ."""
+        try:
+            logger.info(f"Обработка запроса: '{query}'")
+
+            # Находим релевантный документ
+            document = self.get_relevant_document(query)
+            if not document:
+                return "Не могу найти информацию по вашему вопросу."
+
+            # Выполняем системные действия (если есть)
+            system_response = self.execute_system_actions(document, query)
+
+            # Получаем инструкции для пользователя
+            user_instructions = self.get_user_instructions(document)
+
+            # Формируем итоговый ответ
+            response = user_instructions
+            if system_response:
+                response += f"\n\n{system_response}"
+
             return response
 
         except Exception as e:
-            logger.error(f"Ошибка при генерации ответа: {str(e)}")
-            return f"Произошла ошибка при обработке вашего запроса. Пожалуйста, попробуйте позже.\n\nОшибка: {str(e)}"
-
-    def clean_response(self, response: str) -> str:
-        """Очищает ответ от бессмысленного текста и повторений"""
-        # Удаляем все после двойного перевода строки
-        if "\n\n" in response:
-            response = response.split("\n\n")[0]
-
-        # Удаляем числа и пункты списка в конце, которые могут быть артефактами генерации
-        lines = response.split('\n')
-        clean_lines = []
-
-        for line in lines:
-            # Пропускаем пустые строки и строки с одним символом
-            if len(line.strip()) <= 1:
-                continue
-
-            # Пропускаем строки, которые выглядят как артефакты генерации
-            if re.match(r'^(\d+\.?|•|\-|\*)\s*$', line.strip()):
-                continue
-
-            # Пропускаем строки, содержащие только специальные символы
-            if re.match(r'^[#*_\-→⇒⇨›»>]+$', line.strip()):
-                continue
-
-            clean_lines.append(line)
-
-        response = '\n'.join(clean_lines)
-
-        # Обрезаем ответ до последнего осмысленного предложения
-        sentences = re.split(r'(?<=[.!?])\s+', response)
-        if len(sentences) > 1:
-            # Ищем последнее законченное предложение
-            last_complete_sentence = None
-            for i in range(len(sentences) - 1, -1, -1):
-                if re.search(r'[.!?]$', sentences[i]):
-                    last_complete_sentence = i
-                    break
-
-            if last_complete_sentence is not None:
-                response = ' '.join(sentences[:last_complete_sentence + 1])
-
-        return response.strip()
-
-    def is_group_procurement_query(self, query: str, context: str) -> bool:
-        """Определяет, относится ли запрос к групповой закупке"""
-        procurement_keywords = [
-            "групповая закупка", "коллективная закупка",
-            "group purchasing", "gpo", "организовать закупку",
-            "массовая закупка", "совместная закупка", "закупка для отдела",
-            "закупка для команды", "централизованная закупка"
-        ]
-
-        # Проверяем наличие ключевых слов в запросе
-        query_lower = query.lower()
-
-        for keyword in procurement_keywords:
-            if keyword in query_lower:
-                return True
-
-        # Дополнительная проверка по контексту
-        context_lower = context.lower()
-        if any(keyword in context_lower for keyword in procurement_keywords):
-            return True
-
-        return False
-
-    def create_procurement_issue(self, user_query: str) -> str:
-        """Создает задачу в Jira для групповой закупки:cite[1]"""
-        # Здесь можно добавить логику для извлечения деталей из запроса
-        # Пока используем шаблонные значения
-        project_key = "PROC"
-        issue_type = "Task"
-        summary = f"Групповая закупка: запрос от пользователя"
-        description = f"""Пользователь запросил организацию групповой закупки.
-
-Детали запроса:
-{user_query}
-
-Необходимо:
-1. Связаться с пользователем для уточнения деталей
-2. Провести анализ рынка
-3. Найти потенциальных участников закупки
-4. Организовать переговоры с поставщиками
-5. Согласовать условия поставки"""
-
-        # Создаем задачу в Jira
-        issue_data = self.jira_client.create_issue(
-            project_key=project_key,
-            issue_type=issue_type,
-            summary=summary,
-            description=description,
-            components=["Закупки"],
-            labels=["group_purchasing", "procurement"]
-        )
-
-        if issue_data:
-            issue_key = issue_data.get("key", "UNKNOWN")
-            issue_url = self.jira_client.get_issue_url(issue_key)
-            return f"✅ Задача в Jira создана успешно: {issue_key}. Ссылка: {issue_url}"
-        else:
-            return "❌ Не удалось создать задачу в Jira. Пожалуйста, свяжитесь с отделом закупок напрямую."
+            logger.error(f"Ошибка при обработке запроса: {str(e)}")
+            return "Произошла ошибка при обработке вашего запроса."
 
 
 # Утилита для переиндексации данных
 def reindex_data():
-    rag = RAGSystem()
-    rag.build_vector_store()
+    try:
+        logger.info("Запуск переиндексации данных")
+        rag = RAGSystem()
+        rag.build_vector_store()
+        logger.info("Переиндексация данных завершена успешно")
+    except Exception as e:
+        logger.error(f"Ошибка при переиндексации данных: {str(e)}")
+        raise
+
+
+def force_reindex():
+    """Принудительная переиндексация данных с удалением старой базы"""
+    import shutil
+    try:
+        # Удаляем старую базу данных
+        if os.path.exists(PERSIST_DIR):
+            shutil.rmtree(PERSIST_DIR)
+            logger.info(f"Удалена старая векторная база: {PERSIST_DIR}")
+
+        # Создаем новую базу
+        reindex_data()
+        logger.info("Принудительная переиндексация завершена успешно")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка при принудительной переиндексации: {str(e)}")
+        return False
 
 
 if __name__ == "__main__":
-    reindex_data()
+    import argparse
+
+    parser = argparse.ArgumentParser(description='RAG System Management')
+    parser.add_argument('--reindex', action='store_true', help='Принудительная переиндексация данных')
+    args = parser.parse_args()
+
+    if args.reindex:
+        force_reindex()
+    else:
+        reindex_data()
