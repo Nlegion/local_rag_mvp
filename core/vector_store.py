@@ -13,8 +13,8 @@ class VectorStore:
         self.embeddings = embeddings
         self.persist_dir = persist_dir
         self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
+            chunk_size=500,
+            chunk_overlap=100,
             length_function=len,
         )
         self.vectorstore = None
@@ -73,7 +73,7 @@ class VectorStore:
 
             # Логируем найденные документы
             for i, doc in enumerate(results):
-                logger.info(f"Документ {i + 1}: {doc.metadata.get('source', 'Unknown')}")
+                logger.info(f"Документ {i + 1}: {doc.metadata.get('category_id', 'Unknown')} - {doc.metadata.get('category_description', 'No description')}")
 
             return results
 

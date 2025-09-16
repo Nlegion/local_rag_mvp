@@ -13,7 +13,7 @@ class DataProcessor:
         self.data_dir = data_dir
 
     def load_and_process_yaml(self) -> List[Document]:
-        """Загружает и парсит все YAML-файлы в директории."""
+        """Загружает и парсит все YAML-файлы в директории, создавая отдельные документы для каждой категории."""
         documents = []
         try:
             if not os.path.exists(self.data_dir):
@@ -37,23 +37,24 @@ class DataProcessor:
                     with open(file_path, 'r', encoding='utf-8') as file:
                         yaml_data = yaml.safe_load(file)
 
-                    # Формируем текст для поиска
-                    process_text = f"""
-                    Процесс: {yaml_data.get('metadata', {}).get('process_name', 'Название не указано')}
-                    Триггеры: {", ".join(yaml_data.get('triggers', []))}
-                    """
-
-                    system_actions = []
-                    user_instructions = []
-
-                    # Обрабатываем категории и шаги
+                    # Обрабатываем каждую категорию как отдельный документ
                     categories = yaml_data.get('categories', [])
                     for category in categories:
-                        process_text += f"\nКатегория {category.get('category_id', 'N/A')}: {category.get('description', 'Описание отсутствует')}\n"
+                        # Формируем текст для поиска, специфичный для этой категории
+                        process_text = f"""
+                        Процесс: {yaml_data.get('metadata', {}).get('process_name', 'Название не указано')}
+                        Категория: {category.get('category_id', 'N/A')} - {category.get('description', 'Описание отсутствует')}
+                        Триггеры: {", ".join(yaml_data.get('triggers', []))}
+                        """
+
+                        system_actions = []
+                        user_instructions = []
+
+                        # Обрабатываем шаги категории
                         steps = category.get('steps', [])
                         for step in steps:
                             step_desc = step.get('description', 'Описание отсутствует')
-                            process_text += f"  - {step_desc}\n"
+                            process_text += f"Шаг: {step_desc}\n"
 
                             # Собираем системные действия
                             if 'system_action' in step:
@@ -66,21 +67,24 @@ class DataProcessor:
                             if 'user_instruction' in step:
                                 user_instructions.append(step['user_instruction'])
 
-                    # Создаем документ с метаданными
-                    metadata = {
-                        "source": filename,
-                        "system_actions": json.dumps(system_actions),
-                        "user_instructions": json.dumps(user_instructions),
-                        "has_system_actions": len(system_actions) > 0
-                    }
+                        # Создаем документ с метаданными для этой категории
+                        metadata = {
+                            "source": filename,
+                            "category_id": category.get('category_id', ''),
+                            "category_description": category.get('description', ''),
+                            "system_actions": json.dumps(system_actions),
+                            "user_instructions": json.dumps(user_instructions),
+                            "has_system_actions": len(system_actions) > 0
+                        }
 
-                    doc = Document(page_content=process_text, metadata=metadata)
-                    documents.append(doc)
-                    logger.debug(f"Файл {filename} обработан, системных действий: {len(system_actions)}")
+                        doc = Document(page_content=process_text, metadata=metadata)
+                        documents.append(doc)
+                        logger.debug(f"Категория {category.get('category_id')} обработана, инструкций: {len(user_instructions)}")
 
                 except Exception as e:
                     logger.error(f"Ошибка обработки файла {filename}: {str(e)}")
 
+            logger.info(f"Всего создано документов (категорий): {len(documents)}")
             return documents
 
         except Exception as e:

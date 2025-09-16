@@ -15,9 +15,12 @@ class RAGService:
         self.data_processor = DataProcessor(data_dir)
         self.vector_store = VectorStore(
             embeddings=HuggingFaceEmbeddings(
-                model_name="sentence-transformers/all-MiniLM-L6-v2",
+                model_name="./models/LaBSE-en-ru",
                 model_kwargs={'device': 'cpu'},
-                encode_kwargs={'normalize_embeddings': False},
+                encode_kwargs={
+                    'normalize_embeddings': True,
+                    'batch_size': 32
+                }
             ),
             persist_dir=persist_dir
         )
@@ -49,12 +52,14 @@ class RAGService:
         try:
             logger.info(f"Обработка запроса: '{query}'")
 
-            # Находим релевантный документ
+            # Находим релевантные документы (категории)
             results = self.vector_store.search(query, k=3)
             if not results:
                 return "Не могу найти информацию по вашему вопросу."
 
+            # Берем наиболее релевантный документ (категорию)
             document = results[0]
+            logger.info(f"Найдена категория: {document.metadata.get('category_id', 'Unknown')}")
 
             # Проверяем, есть ли системные действия в этом документе
             system_actions_str = document.metadata.get("system_actions", "[]")
