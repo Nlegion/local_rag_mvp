@@ -17,7 +17,7 @@ class RAGService:
             embeddings=HuggingFaceEmbeddings(
                 model_name="sentence-transformers/all-MiniLM-L6-v2",
                 model_kwargs={'device': 'cpu'},
-                encode_kwargs={'normalize_embeddings': False}
+                encode_kwargs={'normalize_embeddings': False},
             ),
             persist_dir=persist_dir
         )
@@ -56,16 +56,25 @@ class RAGService:
 
             document = results[0]
 
+            # Проверяем, есть ли системные действия в этом документе
+            system_actions_str = document.metadata.get("system_actions", "[]")
+            system_actions = json.loads(system_actions_str)
+
             # Выполняем системные действия (если есть)
-            system_response = self.execute_system_actions(document, query)
+            system_response = ""
+            if system_actions:
+                system_response = self.execute_system_actions(document, query)
 
             # Получаем инструкции для пользователя
             user_instructions = self.get_user_instructions(document)
 
             # Формируем итоговый ответ
-            response = user_instructions
             if system_response:
-                response += f"\n\n{system_response}"
+                # Если есть системный ответ, объединяем его с инструкциями
+                response = f"{system_response}\n\n{user_instructions}"
+            else:
+                # Если системных действий нет, показываем только инструкции
+                response = user_instructions
 
             return response
 

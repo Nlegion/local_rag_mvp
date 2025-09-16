@@ -1,6 +1,7 @@
 tmp/tmp.py
 *.env
 .env
+models/
 
 venv/
 /proteus_repo/

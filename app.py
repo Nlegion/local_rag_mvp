@@ -1,6 +1,7 @@
 import streamlit as st
 from core.rag_service import RAGService
 import time
+import os
 from core.logger import setup_logger
 
 logger = setup_logger(__name__)
